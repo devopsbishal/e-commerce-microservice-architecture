@@ -10,7 +10,7 @@ This document outlines the architecture of an e-commerce platform built using a 
 - **Databases**: MongoDB (separate database per service), Elasticsearch for Search Service.
 - **Messaging**: RabbitMQ for event-driven communication.
 - **API Gateway**: Node.js with Express or a dedicated gateway (e.g., Kong).
-- **Deployment**: Docker for containerization, Kubernetes for orchestration (optional for production).
+- **Deployment**: Docker for containerization, Kubernetes for orchestration.
 - **Security**: JWT for authentication, HTTPS for APIs, MongoDB role-based access.
 
 ### Architecture Principles
@@ -73,7 +73,7 @@ The platform comprises 10 microservices and 1 API Gateway, each with a specific 
   - Framework: Node.js + Express + TypeScript.
   - Libraries: `jsonwebtoken` for JWT, `bcrypt` for password hashing, `mongoose` for MongoDB.
   - Port: 3001.
-- **Deployment**: Docker container, MongoDB with role-based access.
+- **Deployment**: Containerized with Docker, scaled with Kubernetes for high traffic, MongoDB with role-based access.
 
 ### 3. Product Catalog Service
 
@@ -100,7 +100,7 @@ The platform comprises 10 microservices and 1 API Gateway, each with a specific 
   - Framework: Node.js + Express + TypeScript.
   - Libraries: `mongoose` for MongoDB.
   - Port: 3002.
-- **Deployment**: Docker container, MongoDB with indexing on `products.title`.
+- **Deployment**: Containerized with Docker, scaled with Kubernetes for high traffic, MongoDB with indexing on `products.title`.
 
 ### 4. Inventory Service
 
@@ -126,7 +126,7 @@ The platform comprises 10 microservices and 1 API Gateway, each with a specific 
   - Framework: Node.js + Express + TypeScript.
   - Libraries: `mongoose`, `amqplib`.
   - Port: 3003.
-- **Deployment**: Docker container, MongoDB with indexes on `productId`.
+- **Deployment**: Containerized with Docker, scaled with Kubernetes for high traffic, MongoDB with indexes on `productId`.
 
 ### 5. Order Service
 
@@ -152,7 +152,7 @@ The platform comprises 10 microservices and 1 API Gateway, each with a specific 
   - Framework: Node.js + Express + TypeScript.
   - Libraries: `mongoose`, `amqplib`, `axios` for REST calls.
   - Port: 3004.
-- **Deployment**: Docker container, MongoDB with indexes on `orderId`, `userId`.
+- **Deployment**: Containerized with Docker, scaled with Kubernetes for high traffic, MongoDB with indexes on `orderId`, `userId`.
 
 ### 6. Payment Service
 
@@ -175,7 +175,7 @@ The platform comprises 10 microservices and 1 API Gateway, each with a specific 
   - Framework: Node.js + Express + TypeScript.
   - Libraries: `mongoose`, `amqplib`, `stripe` for payment integration.
   - Port: 3005.
-- **Deployment**: Docker container, MongoDB with encrypted fields (e.g., payment details).
+- **Deployment**: Containerized with Docker, scaled with Kubernetes for high traffic, MongoDB with encrypted fields (e.g., payment details).
 
 ### 7. Cart Service
 
@@ -199,7 +199,7 @@ The platform comprises 10 microservices and 1 API Gateway, each with a specific 
   - Framework: Node.js + Express + TypeScript.
   - Libraries: `mongoose`, `axios`.
   - Port: 3006.
-- **Deployment**: Docker container, MongoDB with TTL indexes for session carts.
+- **Deployment**: Containerized with Docker, scaled with Kubernetes for high traffic, MongoDB with TTL indexes for session carts.
 
 ### 8. Shipping Service
 
@@ -223,7 +223,7 @@ The platform comprises 10 microservices and 1 API Gateway, each with a specific 
   - Framework: Node.js + Express + TypeScript.
   - Libraries: `mongoose`, `amqplib`, `axios`.
   - Port: 3007.
-- **Deployment**: Docker container, MongoDB with indexes on `orderId`.
+- **Deployment**: Containerized with Docker, scaled with Kubernetes for high traffic, MongoDB with indexes on `orderId`.
 
 ### 9. Review Service
 
@@ -248,7 +248,7 @@ The platform comprises 10 microservices and 1 API Gateway, each with a specific 
   - Framework: Node.js + Express + TypeScript.
   - Libraries: `mongoose`, `amqplib`.
   - Port: 3008.
-- **Deployment**: Docker container, MongoDB with indexes on `productId`.
+- **Deployment**: Containerized with Docker, scaled with Kubernetes for high traffic, MongoDB with indexes on `productId`.
 
 ### 10. Search Service
 
@@ -285,7 +285,7 @@ The platform comprises 10 microservices and 1 API Gateway, each with a specific 
   - Framework: Node.js + Express + TypeScript.
   - Libraries: `@elastic/elasticsearch`, `amqplib`, `axios`.
   - Port: 3009.
-- **Deployment**: Docker container, Elasticsearch instance (e.g., `docker run -p 9200:9200 elasticsearch:8.8.0`).
+- **Deployment**: Containerized with Docker, scaled with Kubernetes for high traffic.
 
 ### 11. Notification Service
 
@@ -305,7 +305,7 @@ The platform comprises 10 microservices and 1 API Gateway, each with a specific 
   - Framework: Node.js + Express + TypeScript.
   - Libraries: `mongoose`, `amqplib`, `nodemailer`, `twilio` (optional).
   - Port: 3010.
-- **Deployment**: Docker container, MongoDB with indexes on `userId`.
+- **Deployment**: Containerized with Docker, scaled with Kubernetes for high traffic, MongoDB with indexes on `userId`.
 
 ## System Workflow Example (Order Placement)
 
