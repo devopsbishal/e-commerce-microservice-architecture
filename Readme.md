@@ -1,333 +1,382 @@
-# E-commerce Microservices Architecture Documentation
+# E-commerce Multi-Tenant Microservices Architecture Documentation
 
 ## Overview
 
-This document outlines the architecture of an e-commerce platform built using a microservices approach. The platform is designed to be scalable, modular, and maintainable, leveraging **Node.js with TypeScript**, **MongoDB** (separate database per service), **RabbitMQ** for event-driven communication, **REST APIs** for inter-service and client communication, and **Elasticsearch** for search functionality. The system consists of **10 microservices** and an **API Gateway**, each handling a specific domain of the e-commerce platform.
+This document outlines the architecture of a **multi-tenant e-commerce platform** built using a microservices approach, designed for scalability, modularity, and flexibility. The platform enables multiple clients (tenants) to operate their own **dedicated admin panels** and **websites**, fetching data via a centralized **API Gateway**. Each tenant’s data is logically separated using a `tenant_id`, supporting **dynamic product fields** for diverse product types. The system leverages **Node.js with TypeScript**, **MongoDB** (separate database per service with tenant-specific collections), **RabbitMQ** for event-driven communication, **REST APIs** for inter-service and client communication, **Elasticsearch** for search, and **AWS S3** for storing product images. The platform consists of **10 microservices** and an **API Gateway**, deployed using **Docker** containers orchestrated by **Kubernetes**.
 
 ### Tech Stack
 
 - **Backend**: Node.js with TypeScript, Express.js for REST APIs.
-- **Databases**: MongoDB (separate database per service), Elasticsearch for Search Service.
+- **Databases**: MongoDB (separate database per service, tenant-specific collections), Elasticsearch for Search Service.
 - **Messaging**: RabbitMQ for event-driven communication.
-- **API Gateway**: Node.js with Express or a dedicated gateway (e.g., Kong).
+- **Storage**: AWS S3 for product images.
+- **API Gateway**: Node.js with Express or Kong.
+- **Frontend**: Client-specific admin panels and websites (framework-agnostic, e.g., React, Next.js).
 - **Deployment**: Docker for containerization, Kubernetes for orchestration.
-- **Security**: JWT for authentication, HTTPS for APIs, MongoDB role-based access.
+- **Security**: JWT for authentication, HTTPS for APIs, MongoDB role-based access, AWS IAM for S3.
 
 ### Architecture Principles
 
-- **Database per Service**: Each microservice has its own MongoDB database to ensure loose coupling and independent scalability.
+- **Multi-Tenancy**: Logical separation of tenant data using `tenant_id` in all databases, ensuring isolation between clients.
+- **Database per Service**: Each microservice has its own MongoDB database, with tenant-specific collections or filters.
+- **Dynamic Fields**: MongoDB’s flexible schema and Elasticsearch’s dynamic mappings support tenant-specific product attributes.
 - **Event-Driven Communication**: RabbitMQ enables asynchronous events (e.g., order creation triggers inventory updates).
-- **REST APIs**: Services expose REST endpoints for synchronous communication.
-- **Single Entry Point**: The API Gateway routes client requests to appropriate services and handles authentication.
+- **REST APIs**: Services expose REST endpoints for synchronous communication, accessible to client websites and admin panels.
+- **Single Entry Point**: The API Gateway routes client requests, enforces tenancy, and handles authentication.
+- **Image Storage**: Product images are stored in AWS S3, with tenant-specific prefixes for isolation.
+
+## Multi-Tenant Model
+
+- **Tenants**: Each client (shop owner) is a tenant, identified by a unique `tenant_id` (e.g., UUID or shop domain like `example-shop`).
+- **Admin Panel**: Each tenant has a dedicated admin panel (e.g., `admin.example-shop.com`) for managing products, orders, etc., built with a frontend framework (e.g., React) and fetching data via the API Gateway.
+- **Website**: Each tenant has a dedicated website (e.g., `www.example-shop.com`) for customers, rendering products and handling checkout via API calls.
+- **Data Isolation**: All MongoDB collections include a `tenant_id` field to filter tenant-specific data. Elasticsearch indexes are tenant-specific or filtered by `tenant_id`.
+- **Dynamic Fields**: Tenant-specific product attributes (e.g., `size` for clothing, `voltage` for electronics) are stored in a `metafields` object in MongoDB and indexed in Elasticsearch.
 
 ## Microservices Overview
 
-The platform comprises 10 microservices and 1 API Gateway, each with a specific responsibility. Below is a detailed description of each component.
+The platform comprises 10 microservices and 1 API Gateway, updated to support multi-tenancy, dynamic fields, and S3 image storage. Below is a detailed description of each component.
 
 ### 1. API Gateway
 
-- **Purpose**: Acts as the single entry point for all client requests, routing them to appropriate microservices and handling cross-cutting concerns like authentication and rate limiting.
+- **Purpose**: Acts as the single entry point for all client requests (admin panels, websites), routing them to microservices, enforcing tenancy, and handling authentication.
 - **Functionalities**:
-  - Route client requests to microservices.
-  - Authenticate requests using JWT tokens (verified via User Service).
+  - Route requests to microservices based on URL paths (e.g., `/api/{tenant_id}/products`).
+  - Authenticate requests using JWT tokens, validated via User Service.
+  - Enforce tenancy by extracting `tenant_id` from URLs or JWT claims.
   - Rate limiting to prevent abuse.
-  - Logging and monitoring of requests.
+  - Logging and monitoring.
 - **Database**: None (stateless).
 - **APIs**:
-  - Proxy endpoints for all services (e.g., `/api/users/*`, `/api/products/*`, `/api/search/*`).
-  - Example: `GET /api/products` routes to Product Catalog Service.
-- **Events**: None (does not publish or consume events).
+  - Proxy endpoints: `GET /api/{tenant_id}/products`, `POST /api/{tenant_id}/orders`.
+  - Example: `GET /api/example-shop/products` routes to Product Catalog Service with `tenant_id = example-shop`.
+- **Events**: None.
 - **Interactions**:
-  - Receives client requests (web, mobile, etc.).
-  - Forwards requests to services via REST (e.g., `http://product-service/api/products`).
-  - Validates JWT tokens by calling User Service (`/api/users/validate-token`).
+  - Receives requests from tenant admin panels and websites.
+  - Forwards requests to services with `tenant_id` in headers (e.g., `X-Tenant-Id: example-shop`).
+  - Validates JWT tokens via User Service (`/api/users/validate-token`).
 - **Tech Details**:
   - Framework: Node.js + Express + TypeScript or Kong.
-  - Libraries: `express-gateway` or `http-proxy-middleware` for routing.
+  - Libraries: `express-gateway`, `http-proxy-middleware`, `jsonwebtoken`.
   - Port: 3000.
-- **Deployment**: Containerized with Docker, scaled with Kubernetes for high traffic.
-- **Security**: HTTPS, JWT validation, rate limiting (e.g., using `express-rate-limit`).
+- **Deployment**:
+  - Docker container with multiple replicas (e.g., 3).
+  - Kubernetes Deployment, Service (ClusterIP), Ingress for external access.
+  - Horizontal Pod Autoscaler (HPA) for scaling.
+- **Security**: HTTPS, JWT validation, tenant_id enforcement, rate limiting (`express-rate-limit`).
 
 ### 2. User Service
 
-- **Purpose**: Manages user accounts, authentication, and authorization.
+- **Purpose**: Manages user accounts, authentication, and authorization for each tenant.
 - **Functionalities**:
-  - User registration, login, password reset (JWT-based authentication).
-  - Profile management (name, address, preferences).
-  - Role-based access control (customer, admin).
+  - User registration, login, password reset (JWT with `tenant_id`).
+  - Profile management (name, address).
+  - Role-based access (customer, tenant admin).
 - **Database**: MongoDB (`user_db`, collections: `users`, `sessions`).
-  - `users`: Stores user details (email, hashed password, name, address, role).
-  - `sessions`: Stores active JWT sessions (optional, with TTL).
+  - `users`: `{ tenant_id, user_id, email, hashed_password, name, role }`.
+  - `sessions`: `{ tenant_id, user_id, jwt_token, expires_at }` with TTL.
+  - Example document:
+    ```javascript
+    {
+      tenant_id: "example-shop",
+      user_id: "u123",
+      email: "admin@example-shop.com",
+      hashed_password: "...",
+      role: "tenant_admin"
+    }
+    ```
 - **APIs**:
-  - `POST /api/users/register`: Create a new user.
-  - `POST /api/users/login`: Authenticate user, return JWT.
-  - `GET /api/users/profile`: Retrieve user profile (requires JWT).
-  - `PUT /api/users/profile`: Update user profile.
+  - `POST /api/users/register`: Create user for a tenant.
+  - `POST /api/users/login`: Authenticate, return JWT with `tenant_id`.
+  - `GET /api/users/profile`: Retrieve profile (requires JWT).
   - `POST /api/users/validate-token`: Validate JWT for API Gateway.
 - **Events**:
-  - Publishes: `user.created` (user ID, email) to RabbitMQ for notifications.
+  - Publishes: `user.created` (`tenant_id`, `user_id`, `email`) to RabbitMQ.
 - **Interactions**:
   - Called by API Gateway for authentication.
   - Publishes events to Notification Service.
 - **Tech Details**:
   - Framework: Node.js + Express + TypeScript.
-  - Libraries: `jsonwebtoken` for JWT, `bcrypt` for password hashing, `mongoose` for MongoDB.
+  - Libraries: `jsonwebtoken`, `bcrypt`, `mongoose`.
   - Port: 3001.
-- **Deployment**: Containerized with Docker, scaled with Kubernetes for high traffic, MongoDB with role-based access.
+- **Deployment**: Docker container, Kubernetes StatefulSet for `user_db`.
+- **Security**: Encrypt passwords, tenant_id filtering.
 
 ### 3. Product Catalog Service
 
-- **Purpose**: Manages product listings and categories.
+- **Purpose**: Manages product listings, categories, and dynamic fields for each tenant.
 - **Functionalities**:
-  - CRUD operations for products (title, description, price, images).
-  - Category management (create, update, list categories).
+  - CRUD for products (title, price, images, metafields).
+  - Category management.
+  - Store images in AWS S3 with tenant-specific prefixes.
 - **Database**: MongoDB (`product_db`, collections: `products`, `categories`).
-  - `products`: Stores product details (ID, title, description, price, categories, images).
-  - `categories`: Stores category hierarchy (ID, name, parentId).
+  - `products`: `{ tenant_id, product_id, title, price, image_urls, metafields, categories }`.
+  - `metafields`: Stores dynamic fields (e.g., `size`, `voltage`).
+  - `image_urls`: References S3 paths (e.g., `s3://ecommerce-images/example-shop/products/123.jpg`).
+  - Example document:
+    ```javascript
+    {
+      tenant_id: "example-shop",
+      product_id: "p123",
+      title: "T-Shirt",
+      price: 19.99,
+      image_urls: ["s3://ecommerce-images/example-shop/products/p123.jpg"],
+      metafields: { size: "Large", color: "Blue" },
+      categories: ["clothing"]
+    }
+    ```
+- **S3 Storage**:
+  - Images uploaded to S3 bucket `ecommerce-images` with prefix `{tenant_id}/products/`.
+  - Example upload (Node.js with AWS SDK):
+    ```javascript
+    const { S3 } = require("aws-sdk");
+    const s3 = new S3();
+    await s3
+      .upload({
+        Bucket: "ecommerce-images",
+        Key: `${tenant_id}/products/${product_id}.jpg`,
+        Body: imageBuffer,
+        ContentType: "image/jpeg",
+        ACL: "public-read",
+      })
+      .promise();
+    ```
 - **APIs**:
-  - `GET /api/products`: List products with pagination.
-  - `GET /api/products/{id}`: Get product details.
-  - `POST /api/products`: Create product (admin only).
-  - `PUT /api/products/{id}`: Update product.
-  - `DELETE /api/products/{id}`: Delete product.
-  - `GET /api/categories`: List categories.
+  - `GET /api/{tenant_id}/products`: List products (paginated).
+  - `GET /api/{tenant_id}/products/{id}`: Get product details.
+  - `POST /api/{tenant_id}/products`: Create product with image upload.
+  - `PUT /api/{tenant_id}/products/{id}`: Update product, including metafields.
 - **Events**:
-  - Publishes: `product.created`, `product.updated`, `product.deleted` (product ID, details) to RabbitMQ for Search Service.
+  - Publishes: `product.created`, `product.updated`, `product.deleted` (`tenant_id`, `product_id`, details) to RabbitMQ.
 - **Interactions**:
-  - Called by Search Service for product details.
-  - Publishes events to Search Service for indexing.
+  - Called by Search Service for product data.
+  - Uploads images to S3, stores URLs in MongoDB.
 - **Tech Details**:
   - Framework: Node.js + Express + TypeScript.
-  - Libraries: `mongoose` for MongoDB.
+  - Libraries: `mongoose`, `aws-sdk`.
   - Port: 3002.
-- **Deployment**: Containerized with Docker, scaled with Kubernetes for high traffic, MongoDB with indexing on `products.title`.
+- **Deployment**: Docker container, Kubernetes StatefulSet for `product_db`.
+- **Security**: Tenant_id filtering, S3 IAM roles for uploads.
 
 ### 4. Inventory Service
 
-- **Purpose**: Tracks product stock levels.
+- **Purpose**: Tracks product stock levels for each tenant.
 - **Functionalities**:
-  - Monitor and update stock quantities.
+  - Monitor/update stock quantities.
   - Reserve stock during checkout.
-  - Emit low-stock alerts.
 - **Database**: MongoDB (`inventory_db`, collection: `inventory`).
-  - `inventory`: Stores product ID, stock quantity, reserved quantity.
+  - `inventory`: `{ tenant_id, product_id, stock, reserved }`.
 - **APIs**:
-  - `GET /api/inventory/{productId}`: Get stock for a product.
-  - `POST /api/inventory/reserve`: Reserve stock for an order.
-  - `PUT /api/inventory/{productId}`: Update stock (admin or Order Service).
+  - `GET /api/{tenant_id}/inventory/{productId}`: Get stock.
+  - `POST /api/{tenant_id}/inventory/reserve`: Reserve stock.
 - **Events**:
-  - Consumes: `order.created` (product IDs, quantities) to reserve stock.
-  - Publishes: `inventory.low` (product ID, stock level) for notifications.
-  - Publishes: `inventory.updated` for Search Service (optional).
+  - Consumes: `order.created` (`tenant_id`, product IDs).
+  - Publishes: `inventory.low` (`tenant_id`, `product_id`).
 - **Interactions**:
-  - Called by Order Service for stock reservation.
-  - Publishes events to Notification and Search Services.
+  - Called by Order Service.
+  - Publishes events to Notification/Search Services.
 - **Tech Details**:
   - Framework: Node.js + Express + TypeScript.
   - Libraries: `mongoose`, `amqplib`.
   - Port: 3003.
-- **Deployment**: Containerized with Docker, scaled with Kubernetes for high traffic, MongoDB with indexes on `productId`.
+- **Deployment**: Docker container, Kubernetes StatefulSet for `inventory_db`.
+- **Security**: Tenant_id filtering.
 
 ### 5. Order Service
 
-- **Purpose**: Manages order creation and lifecycle.
+- **Purpose**: Manages order creation/lifecycle for each tenant.
 - **Functionalities**:
-  - Create and track orders.
-  - Update order status (pending, confirmed, shipped, delivered).
-  - Coordinate with Inventory, Payment, and Shipping Services.
+  - Create/track orders.
+  - Update status (pending, shipped).
 - **Database**: MongoDB (`order_db`, collection: `orders`).
-  - `orders`: Stores order ID, user ID, products, status, total amount, shipping details.
+  - `orders`: `{ tenant_id, order_id, user_id, products, status, total }`.
 - **APIs**:
-  - `POST /api/orders`: Create an order.
-  - `GET /api/orders/{orderId}`: Get order details.
-  - `PUT /api/orders/{orderId}/status`: Update order status.
+  - `POST /api/{tenant_id}/orders`: Create order.
+  - `GET /api/{tenant_id}/orders/{orderId}`: Get order details.
 - **Events**:
-  - Publishes: `order.created` (order ID, user ID, products) to RabbitMQ for inventory, shipping, and notifications.
+  - Publishes: `order.created` (`tenant_id`, `order_id`, products).
 - **Interactions**:
-  - Calls Inventory Service to reserve stock.
-  - Calls Payment Service to process payment.
-  - Calls Shipping Service for shipping options.
-  - Publishes events to Notification and Search Services.
+  - Calls Inventory, Payment, Shipping Services.
+  - Publishes events to Notification/Search Services.
 - **Tech Details**:
   - Framework: Node.js + Express + TypeScript.
-  - Libraries: `mongoose`, `amqplib`, `axios` for REST calls.
+  - Libraries: `mongoose`, `amqplib`, `axios`.
   - Port: 3004.
-- **Deployment**: Containerized with Docker, scaled with Kubernetes for high traffic, MongoDB with indexes on `orderId`, `userId`.
+- **Deployment**: Docker container, Kubernetes StatefulSet for `order_db`.
+- **Security**: Tenant_id filtering.
 
 ### 6. Payment Service
 
-- **Purpose**: Handles payment processing and transactions.
+- **Purpose**: Handles payment processing for each tenant.
 - **Functionalities**:
-  - Process payments via gateways (e.g., Stripe).
-  - Manage refunds and transaction records.
+  - Process payments (e.g., Stripe).
+  - Manage refunds.
 - **Database**: MongoDB (`payment_db`, collection: `transactions`).
-  - `transactions`: Stores transaction ID, order ID, amount, status, payment method.
+  - `transactions`: `{ tenant_id, order_id, amount, status }`.
 - **APIs**:
-  - `POST /api/payments`: Process payment for an order.
-  - `POST /api/payments/refund`: Process refund.
-  - `GET /api/payments/{orderId}`: Get transaction details.
+  - `POST /api/{tenant_id}/payments`: Process payment.
+  - `GET /api/{tenant_id}/payments/{orderId}`: Get transaction.
 - **Events**:
-  - Publishes: `payment.success`, `payment.failed` (order ID, status) to RabbitMQ for order updates and notifications.
+  - Publishes: `payment.success`, `payment.failed` (`tenant_id`, `order_id`).
 - **Interactions**:
-  - Called by Order Service for payment processing.
+  - Called by Order Service.
   - Publishes events to Notification Service.
 - **Tech Details**:
   - Framework: Node.js + Express + TypeScript.
-  - Libraries: `mongoose`, `amqplib`, `stripe` for payment integration.
+  - Libraries: `mongoose`, `amqplib`, `stripe`.
   - Port: 3005.
-- **Deployment**: Containerized with Docker, scaled with Kubernetes for high traffic, MongoDB with encrypted fields (e.g., payment details).
+- **Deployment**: Docker container, Kubernetes StatefulSet for `payment_db`.
+- **Security**: Encrypt transaction data, tenant_id filtering.
 
 ### 7. Cart Service
 
-- **Purpose**: Manages user shopping carts.
+- **Purpose**: Manages user shopping carts for each tenant.
 - **Functionalities**:
-  - Add/remove items to/from cart.
-  - Calculate totals (including taxes, discounts).
-  - Persist carts for logged-in users or sessions.
+  - Add/remove items.
+  - Calculate totals.
 - **Database**: MongoDB (`cart_db`, collection: `carts`).
-  - `carts`: Stores user ID (or session ID), products, quantities, total.
+  - `carts`: `{ tenant_id, user_id, products, total }`.
 - **APIs**:
-  - `GET /api/cart`: Get user’s cart.
-  - `POST /api/cart/add`: Add item to cart.
-  - `DELETE /api/cart/{productId}`: Remove item from cart.
-  - `PUT /api/cart`: Update cart quantities.
-- **Events**: None (cart updates are synchronous via REST).
+  - `GET /api/{tenant_id}/cart`: Get cart.
+  - `POST /api/{tenant_id}/cart/add`: Add item.
+- **Events**: None.
 - **Interactions**:
-  - Called by Order Service to retrieve cart during checkout.
-  - Queries Product Catalog Service for product details (e.g., price).
+  - Called by Order Service.
+  - Queries Product Catalog Service.
 - **Tech Details**:
   - Framework: Node.js + Express + TypeScript.
   - Libraries: `mongoose`, `axios`.
   - Port: 3006.
-- **Deployment**: Containerized with Docker, scaled with Kubernetes for high traffic, MongoDB with TTL indexes for session carts.
+- **Deployment**: Docker container, Kubernetes StatefulSet for `cart_db`.
+- **Security**: Tenant_id filtering.
 
 ### 8. Shipping Service
 
-- **Purpose**: Manages shipping options and tracking.
+- **Purpose**: Manages shipping options/tracking for each tenant.
 - **Functionalities**:
-  - Calculate shipping costs based on location and weight.
-  - Integrate with shipping providers (e.g., FedEx API).
+  - Calculate shipping costs.
   - Track shipments.
 - **Database**: MongoDB (`shipping_db`, collection: `shipments`).
-  - `shipments`: Stores order ID, shipping provider, cost, tracking number, status.
+  - `shipments`: `{ tenant_id, order_id, provider, cost, tracking }`.
 - **APIs**:
-  - `POST /api/shipping/quote`: Get shipping cost for an order.
-  - `GET /api/shipping/track/{orderId}`: Track shipment.
+  - `POST /api/{tenant_id}/shipping/quote`: Get cost.
+  - `GET /api/{tenant_id}/shipping/track/{orderId}`: Track shipment.
 - **Events**:
-  - Consumes: `order.created` to generate shipping options.
-  - Publishes: `shipping.updated` (order ID, tracking number) for notifications.
+  - Consumes: `order.created`.
+  - Publishes: `shipping.updated` (`tenant_id`, `order_id`).
 - **Interactions**:
-  - Called by Order Service for shipping quotes.
+  - Called by Order Service.
   - Publishes events to Notification Service.
 - **Tech Details**:
   - Framework: Node.js + Express + TypeScript.
   - Libraries: `mongoose`, `amqplib`, `axios`.
   - Port: 3007.
-- **Deployment**: Containerized with Docker, scaled with Kubernetes for high traffic, MongoDB with indexes on `orderId`.
+- **Deployment**: Docker container, Kubernetes StatefulSet for `shipping_db`.
+- **Security**: Tenant_id filtering.
 
 ### 9. Review Service
 
-- **Purpose**: Manages customer reviews and ratings for products.
+- **Purpose**: Manages customer reviews/ratings for each tenant.
 - **Functionalities**:
-  - Submit, edit, delete reviews.
-  - Calculate average product ratings.
-  - Moderate reviews (admin functionality).
+  - Submit/edit reviews.
+  - Calculate average ratings.
 - **Database**: MongoDB (`review_db`, collection: `reviews`).
-  - `reviews`: Stores product ID, user ID, rating, comment, createdAt.
+  - `reviews`: `{ tenant_id, product_id, user_id, rating, comment }`.
 - **APIs**:
-  - `POST /api/reviews`: Submit a review.
-  - `GET /api/reviews/product/{productId}`: Get reviews for a product.
-  - `PUT /api/reviews/{reviewId}`: Update review (user or admin).
-  - `DELETE /api/reviews/{reviewId}`: Delete review (admin only).
+  - `POST /api/{tenant_id}/reviews`: Submit review.
+  - `GET /api/{tenant_id}/reviews/product/{productId}`: Get reviews.
 - **Events**:
-  - Publishes: `review.created`, `review.updated`, `review.deleted` (product ID, rating) to RabbitMQ for Search Service and notifications.
+  - Publishes: `review.created`, `review.updated` (`tenant_id`, `product_id`).
 - **Interactions**:
-  - Called by Search Service for review data.
-  - Publishes events to Search and Notification Services.
+  - Called by Search Service.
+  - Publishes events to Search/Notification Services.
 - **Tech Details**:
   - Framework: Node.js + Express + TypeScript.
   - Libraries: `mongoose`, `amqplib`.
   - Port: 3008.
-- **Deployment**: Containerized with Docker, scaled with Kubernetes for high traffic, MongoDB with indexes on `productId`.
+- **Deployment**: Docker container, Kubernetes StatefulSet for `review_db`.
+- **Security**: Tenant_id filtering.
 
 ### 10. Search Service
 
-- **Purpose**: Provides advanced search and filtering for products using Elasticsearch.
+- **Purpose**: Provides search/filtering for products across tenants using Elasticsearch.
 - **Functionalities**:
-  - Full-text search across products (title, description, keywords).
-  - Faceted search (by category, price, rating, stock).
-- **Database**: Elasticsearch (`products_index`).
-
-  - Index schema:
-
+  - Full-text search (title, metafields).
+  - Faceted search (category, price, metafields).
+- **Database**: Elasticsearch (`products_index` per tenant or filtered by `tenant_id`).
+  - Schema:
     ```json
     {
-      "productId": "string",
-      "title": "text",
-      "description": "text",
-      "categories": ["keyword"],
-      "price": "float",
-      "averageRating": "float",
-      "stock": "integer",
-      "keywords": ["text"]
+      "tenant_id": "example-shop",
+      "product_id": "p123",
+      "title": "T-Shirt",
+      "price": 19.99,
+      "metafields": { "size": "Large", "color": "Blue" },
+      "categories": ["clothing"],
+      "averageRating": 4.5,
+      "stock": 100
     }
     ```
-
 - **APIs**:
-  - `GET /api/search?q={query}`: Full-text search.
-  - `GET /api/search/filters?category={category}&minPrice={price}&minRating={rating}`: Faceted search.
+  - `GET /api/{tenant_id}/search?q={query}`: Full-text search.
+  - `GET /api/{tenant_id}/search/filters?category={category}&size={size}`: Faceted search.
 - **Events**:
-  - Consumes: `product.created`, `product.updated`, `product.deleted`, `review.created`, `review.updated` from RabbitMQ to update index.
+  - Consumes: `product.created`, `product.updated`, `review.created` (`tenant_id`, data).
 - **Interactions**:
-  - Fetches data from Product Catalog (`/api/products/{id}`), Review (`/api/reviews/product/{id}`), and Inventory (`/api/inventory/{id}`) Services via REST.
-  - Updates Elasticsearch index with denormalized data.
+  - Fetches data from Product Catalog, Review, Inventory Services via REST.
+  - Indexes tenant-specific data in Elasticsearch.
 - **Tech Details**:
   - Framework: Node.js + Express + TypeScript.
   - Libraries: `@elastic/elasticsearch`, `amqplib`, `axios`.
   - Port: 3009.
-- **Deployment**: Containerized with Docker, scaled with Kubernetes for high traffic.
+- **Deployment**: Docker container, Kubernetes StatefulSet for Elasticsearch.
+- **Security**: Tenant_id filtering, Elasticsearch authentication.
 
 ### 11. Notification Service
 
-- **Purpose**: Sends notifications to users (email, SMS, push).
+- **Purpose**: Sends notifications (email, SMS) for each tenant.
 - **Functionalities**:
-  - Send order confirmations, shipping updates, review notifications.
-  - Log notification history.
+  - Send order confirmations, shipping updates.
 - **Database**: MongoDB (`notification_db`, collection: `notifications`).
-  - `notifications`: Stores user ID, type (email/SMS), content, status, createdAt.
+  - `notifications`: `{ tenant_id, user_id, type, content, status }`.
 - **APIs**:
-  - `POST /api/notifications/send`: Manually trigger a notification (optional).
+  - `POST /api/{tenant_id}/notifications/send`: Trigger notification.
 - **Events**:
-  - Consumes: `order.created`, `payment.success`, `shipping.updated`, `review.created` from RabbitMQ to send notifications.
+  - Consumes: `order.created`, `payment.success`, `shipping.updated` (`tenant_id`, data).
 - **Interactions**:
-  - Uses `nodemailer` for email, Twilio for SMS (optional).
+  - Uses `nodemailer` for email, Twilio for SMS.
 - **Tech Details**:
   - Framework: Node.js + Express + TypeScript.
-  - Libraries: `mongoose`, `amqplib`, `nodemailer`, `twilio` (optional).
+  - Libraries: `mongoose`, `amqplib`, `nodemailer`.
   - Port: 3010.
-- **Deployment**: Containerized with Docker, scaled with Kubernetes for high traffic, MongoDB with indexes on `userId`.
+- **Deployment**: Docker container, Kubernetes StatefulSet for `notification_db`.
+- **Security**: Tenant_id filtering, secure credentials.
 
-## System Workflow Example (Order Placement)
+## System Workflow Example (Product Display on Tenant Website)
 
-1. **Client**: Sends `POST /api/orders` to API Gateway with JWT.
-2. **API Gateway**: Validates JWT via User Service, routes request to Order Service.
-3. **Order Service**:
-   - Retrieves cart from Cart Service (`GET /api/cart`).
-   - Reserves stock via Inventory Service (`POST /api/inventory/reserve`).
-   - Processes payment via Payment Service (`POST /api/payments`).
-   - Creates order in `order_db`, publishes `order.created` to RabbitMQ.
-4. **Inventory Service**: Consumes `order.created`, updates stock in `inventory_db`.
-5. **Shipping Service**: Consumes `order.created`, generates shipping options in `shipping_db`, publishes `shipping.updated`.
-6. **Notification Service**: Consumes `order.created`, `payment.success`, `shipping.updated`, sends email/SMS.
-7. **Search Service**: Consumes `product.updated` or `review.created` (if related), updates Elasticsearch index.
-8. **Client**: Searches products via `GET /api/search?q=laptop`, routed to Search Service, which queries Elasticsearch.
+1. **Client**: Visits `www.example-shop.com`, which sends `GET /api/example-shop/products` to API Gateway.
+2. **API Gateway**: Validates JWT, extracts `tenant_id = example-shop`, routes to Product Catalog Service.
+3. **Product Catalog Service**:
+   - Queries `product_db`: `db.products.find({ tenant_id: "example-shop" }).limit(20)`.
+   - Retrieves products with S3 image URLs and metafields (e.g., `size: "Large"`).
+   - Returns JSON to API Gateway.
+4. **Client Website**: Renders products using a frontend framework (e.g., React):
+   ```javascript
+   fetch("https://api.ecommerce.com/api/example-shop/products", {
+     headers: { Authorization: "Bearer <jwt>" },
+   })
+     .then((res) => res.json())
+     .then((products) => {
+       products.forEach((p) => console.log(p.title, p.metafields.size));
+     });
+   ```
+5. **Search (if used)**: A search for “blue t-shirt” hits Search Service, querying Elasticsearch with `tenant_id = example-shop`.
+6. **Notification**: Product updates trigger `product.updated` events, notifying tenants via Notification Service.
 
 ## Infrastructure Setup
 
-- **Docker**: Each microservice runs in a separate Docker container.
-
-  - Example `Dockerfile` for a service:
-
+- **Docker**: Each microservice runs in a Docker container.
+  - Example `Dockerfile`:
     ```dockerfile
     FROM node:18
     WORKDIR /app
@@ -336,69 +385,68 @@ The platform comprises 10 microservices and 1 API Gateway, each with a specific 
     COPY . .
     CMD ["npm", "run", "start"]
     ```
-
-- **MongoDB**: 9 separate databases (`user_db`, `product_db`, etc.) using Docker or MongoDB Atlas.
-
-  - Example Docker Compose for `product_db`:
-
-    ```yaml
-    services:
-      product_db:
-        image: mongo:latest
-        ports:
-          - "27018:27017"
-        volumes:
-          - product_data:/data/db
-    volumes:
-      product_data:
+- **Kubernetes**:
+  - Deployments for services (2-5 replicas).
+  - StatefulSets for MongoDB databases and Elasticsearch.
+  - Ingress for API Gateway (e.g., `api.ecommerce.com`).
+  - HPA for scaling based on CPU/memory.
+- **MongoDB**: 9 databases (`user_db`, `product_db`, etc.) with tenant_id filtering.
+  - Example: `docker run -p 27017:27017 mongo:latest`.
+- **Elasticsearch**: Single instance or tenant-specific indexes (`docker run -p 9200:9200 elasticsearch:8.8.0`).
+- **RabbitMQ**: Durable queues (`docker run -p 5672:5672 rabbitmq:3-management`).
+- **AWS S3**: Bucket `ecommerce-images` with tenant prefixes (e.g., `example-shop/products/`).
+  - IAM policy:
+    ```json
+    {
+      "Version": "2012-10-17",
+      "Statement": [
+        {
+          "Effect": "Allow",
+          "Action": ["s3:PutObject", "s3:GetObject"],
+          "Resource": "arn:aws:s3:::ecommerce-images/*"
+        }
+      ]
+    }
     ```
-
-- **Elasticsearch**: Single instance for Search Service (`docker run -p 9200:9200 elasticsearch:8.8.0`).
-- **RabbitMQ**: Single instance with durable queues (`docker run -p 5672:5672 rabbitmq:3-management`).
-- **Kubernetes**: Orchestrate containers, scale services, and manage MongoDB/Elasticsearch clusters.
-- **Monitoring**: Prometheus for metrics, Grafana for visualization, Winston for logging.
+- **Monitoring**: Prometheus, Grafana, Winston for logging.
 
 ## Security Considerations
 
-- **Authentication**: JWT tokens issued by User Service, validated by API Gateway.
-- **Authorization**: Role-based access (e.g., admin-only endpoints in Product Catalog Service).
-- **Data Encryption**: Encrypt sensitive MongoDB fields (e.g., user passwords, payment details) using `bcrypt` or MongoDB encryption.
-- **API Security**: HTTPS for all REST APIs, API keys for service-to-service communication.
-- **Database Security**: Separate MongoDB credentials per service, role-based access control.
-- **Elasticsearch Security**: Enable authentication (e.g., API keys) for production.
+- **Authentication**: JWT tokens include `tenant_id`, validated by API Gateway/User Service.
+- **Authorization**: Role-based access (tenant admin vs. customer).
+- **Data Isolation**: All queries filter by `tenant_id` (e.g., `db.products.find({ tenant_id })`).
+- **Encryption**: Sensitive data (passwords, payment details) encrypted in MongoDB.
+- **S3 Security**: IAM roles, bucket policies restrict access to tenant prefixes.
+- **API Security**: HTTPS, API keys for service-to-service communication.
 
 ## Scalability and Performance
 
-- **Horizontal Scaling**: Scale high-traffic services (e.g., Product Catalog, Search) using Kubernetes.
+- **Horizontal Scaling**: Kubernetes scales services (e.g., Product Catalog, Search) via replicas.
 - **Database Optimization**:
-  - MongoDB: Use indexes (e.g., `productId` in `inventory_db`, `title` in `product_db`) and sharding for large datasets.
-  - Elasticsearch: Optimize mappings and analyzers for search performance.
-- **Caching**: Use Redis for caching search results or frequently accessed data (e.g., product details).
-- **Event Reliability**: RabbitMQ durable queues and retries ensure no event loss.
+  - MongoDB: Indexes on `tenant_id`, `product_id` (e.g., `db.products.createIndex({ tenant_id: 1, product_id: 1 })`).
+  - Elasticsearch: Dynamic mappings for metafields, tenant-specific indexes.
+- **Caching**: Redis for product data (e.g., `tenant:example-shop:products`).
+- **S3**: CDN (CloudFront) for fast image delivery.
+- **Event Reliability**: RabbitMQ durable queues ensure no event loss.
 
 ## Deployment Plan
 
-- **Local Development**: Use Docker Compose to run all services, MongoDB databases, Elasticsearch, and RabbitMQ.
-
-  - Example `docker-compose.yml` snippet:
-
+- **Local Development**: Docker Compose for services, MongoDB, Elasticsearch, RabbitMQ.
+  - Example `docker-compose.yml`:
     ```yaml
     services:
       api-gateway:
         build: ./api-gateway
         ports:
           - "3000:3000"
-      user-service:
-        build: ./user-service
+      product-catalog:
+        build: ./product-catalog
         ports:
-          - "3001:3001"
-        depends_on:
-          - user_db
-      user_db:
+          - "3002:3002"
+      product_db:
         image: mongo:latest
         ports:
-          - "27017:27017"
-      # Add other services and databases
+          - "27018:27017"
       elasticsearch:
         image: elasticsearch:8.8.0
         ports:
@@ -407,19 +455,17 @@ The platform comprises 10 microservices and 1 API Gateway, each with a specific 
         image: rabbitmq:3-management
         ports:
           - "5672:5672"
-          - "15672:15672"
     ```
-
-- **Production**: Deploy on AWS/GCP with Kubernetes, MongoDB Atlas for managed databases, and Elastic Cloud for Elasticsearch.
-- **CI/CD**: Use GitHub Actions for automated testing and deployment.
+- **Production**: AWS EKS for Kubernetes, MongoDB Atlas, Elastic Cloud, S3 with CloudFront.
+- **CI/CD**: GitHub Actions for testing/deployment.
 
 ## Future Enhancements
 
-- **Recommendation Service**: Add personalized product suggestions using machine learning.
-- **Analytics Service**: Track user behavior and sales metrics.
-- **Advanced Search**: Implement autocomplete and fuzzy search in Elasticsearch.
-- **Database Scaling**: Shard MongoDB databases for high-traffic services (e.g., `product_db`, `order_db`).
+- **Recommendation Service**: Personalized product suggestions.
+- **Analytics Service**: Tenant-specific sales metrics.
+- **Advanced Search**: Autocomplete, fuzzy search in Elasticsearch.
+- **Tenant Onboarding**: Automated setup for new tenants.
 
 ## Conclusion
 
-This architecture provides a robust, scalable foundation for the e-commerce platform, with 10 microservices and an API Gateway covering all core functionalities (user management, product catalog, inventory, orders, payments, cart, shipping, reviews, search, notifications). The database-per-service approach ensures independence, while Elasticsearch powers advanced search, and RabbitMQ enables loose coupling. The system is designed for an MVP but is extensible for future growth.
+This multi-tenant e-commerce platform supports dedicated admin panels and websites for each client, fetching data via a centralized API Gateway. Logical separation with `tenant_id` ensures data isolation, while MongoDB’s flexible schema and Elasticsearch’s dynamic mappings handle diverse product fields. AWS S3 stores images with tenant-specific prefixes, and Docker/Kubernetes ensure scalable deployment. The architecture extends the original microservices design, providing a robust, extensible solution for multi-tenant e-commerce.
